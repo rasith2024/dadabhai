@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "79457416437",
+    "project_id": "dadabhai-e7bf8",
+    "storage_bucket": "dadabhai-e7bf8.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:79457416437:android:0c30db3b329a3a955201bc",
+        "android_client_info": {
+          "package_name": "com.dadabhaitravel.ae.dadabhaitravel"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAn4qIZlToUS1Po0PLgbY76yNqQSV5Ldb4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

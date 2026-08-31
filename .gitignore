@@ -1,0 +1,19 @@
+
+# Flutter/Dart generated
+.dart_tool/
+.packages
+.pub/
+build/
+
+# Android generated
+android/.gradle/
+android/app/build/
+
+# iOS generated
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/ephemeral/
+ios/DerivedData/
+
+# macOS
+.DS_Store
