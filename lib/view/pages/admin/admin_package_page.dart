@@ -1,10 +1,12 @@
 import 'dart:typed_data';
 
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:dadabhaitravel/view/pages/admin/admin_mysql_service.dart';
 import 'package:dadabhaitravel/view/pages/admin/admin_package.dart';
 import 'package:dadabhaitravel/view/pages/admin/admin_package_service.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'dart:async';
+import 'dart:convert';
 
 import 'package:dadabhaitravel/view/pages/dashboard.dart' show LogoColors;
 
@@ -1786,22 +1788,27 @@ class _ManagePackagesTab extends StatelessWidget {
 /// `bookings/`. This also supports bookings that were already created before
 /// the admin screen was added.
 class _AdminBooking {
-  final DocumentReference<Map<String, dynamic>> reference;
   final String userId;
   final String id;
+
   final String name;
   final String email;
   final String mobile;
+
   final DateTime checkIn;
+
   final int adults;
   final int children;
+
   final String? selectedPackageOption;
+
   final String status;
+
   final DateTime createdAt;
+
   final Map<String, dynamic> package;
 
   const _AdminBooking({
-    required this.reference,
     required this.userId,
     required this.id,
     required this.name,
@@ -1816,82 +1823,274 @@ class _AdminBooking {
     required this.package,
   });
 
-  factory _AdminBooking.fromDoc(
-      QueryDocumentSnapshot<Map<String, dynamic>> doc,
+  // ============================================================
+  // MYSQL ROW -> ADMIN BOOKING
+  // ============================================================
+
+  factory _AdminBooking.fromRow(
+      Map<String, dynamic> row,
       ) {
-    final data = doc.data();
-    final parts = doc.reference.path.split('/');
-    final rawPackage = data['package'];
+    // ---------------- Package JSON ----------------
+
+    Map<String, dynamic> package = {};
+
+    final rawPackage = row['package_json'];
+
+    if (rawPackage != null &&
+        rawPackage.toString().trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(
+          rawPackage.toString(),
+        );
+
+        if (decoded is Map) {
+          package =
+          Map<String, dynamic>.from(
+            decoded,
+          );
+        }
+      } catch (e) {
+        debugPrint(
+          'Booking package JSON error: $e',
+        );
+      }
+    }
+
+    // ---------------- Date helper ----------------
+
+    DateTime parseDate(dynamic raw) {
+      if (raw == null) {
+        return DateTime.now();
+      }
+
+      final value =
+      raw.toString().trim();
+
+      if (value.isEmpty) {
+        return DateTime.now();
+      }
+
+      return DateTime.tryParse(value) ??
+          DateTime.now();
+    }
+
+    // ---------------- Integer helper ----------------
+
+    int parseInt(
+        dynamic raw, {
+          int fallback = 0,
+        }) {
+      if (raw is int) {
+        return raw;
+      }
+
+      if (raw is num) {
+        return raw.toInt();
+      }
+
+      return int.tryParse(
+        raw?.toString() ?? '',
+      ) ??
+          fallback;
+    }
 
     return _AdminBooking(
-      reference: doc.reference,
-      userId: parts.length >= 2 ? parts[1] : '',
-      id: doc.id,
-      name: data['name'] ?? '',
-      email: data['email'] ?? '',
-      mobile: data['mobile'] ?? '',
-      checkIn: data['checkIn'] is Timestamp
-          ? (data['checkIn'] as Timestamp).toDate()
-          : DateTime.now(),
-      adults: (data['adults'] as num?)?.toInt() ?? 0,
-      children: (data['children'] as num?)?.toInt() ?? 0,
-      selectedPackageOption: data['selectedPackageOption'] as String?,
-      status: (data['status'] as String?) ?? 'pending',
-      createdAt: data['createdAt'] is Timestamp
-          ? (data['createdAt'] as Timestamp).toDate()
-          : DateTime.now(),
-      package: rawPackage is Map
-          ? Map<String, dynamic>.from(rawPackage)
-          : <String, dynamic>{},
+      userId:
+      row['uid']?.toString() ?? '',
+
+      id:
+      row['id']?.toString() ?? '',
+
+      name:
+      row['name']?.toString() ?? '',
+
+      email:
+      row['email']?.toString() ?? '',
+
+      mobile:
+      row['mobile']?.toString() ?? '',
+
+      checkIn:
+      parseDate(row['checkIn']),
+
+      adults:
+      parseInt(
+        row['adults'],
+        fallback: 1,
+      ),
+
+      children:
+      parseInt(
+        row['children'],
+      ),
+
+      selectedPackageOption:
+      row['selectedPackageOption']
+          ?.toString(),
+
+      status:
+      row['status']?.toString() ??
+          'pending',
+
+      createdAt:
+      parseDate(row['createdAt']),
+
+      package: package,
     );
   }
 
-  String get packageTitle =>
-      (package['title'] as String?)?.trim().isNotEmpty == true
-          ? package['title'] as String
-          : 'Package';
+  // ============================================================
+  // PACKAGE TITLE
+  // ============================================================
+
+  String get packageTitle {
+    final title =
+    package['title']?.toString().trim();
+
+    if (title != null &&
+        title.isNotEmpty) {
+      return title;
+    }
+
+    return 'Package';
+  }
+
+  // ============================================================
+  // PACKAGE IMAGE
+  // ============================================================
 
   String? get imageUrl {
+    // Your TravelPackage wishlist map normally uses images.
     final images = package['images'];
-    if (images is List && images.isNotEmpty) {
-      return images.first?.toString();
+
+    if (images is List &&
+        images.isNotEmpty) {
+      final value =
+      images.first?.toString();
+
+      if (value != null &&
+          value.trim().isNotEmpty) {
+        return value;
+      }
     }
+
+    // Also support imageUrl.
+    final singleImage =
+    package['imageUrl']?.toString();
+
+    if (singleImage != null &&
+        singleImage.trim().isNotEmpty) {
+      return singleImage;
+    }
+
+    // Also support imageUrls.
+    final imageUrls =
+    package['imageUrls'];
+
+    if (imageUrls is List &&
+        imageUrls.isNotEmpty) {
+      return imageUrls.first?.toString();
+    }
+
     return null;
   }
 }
 
-class _AdminBookingsTab extends StatelessWidget {
+class _AdminBookingsTab
+    extends StatefulWidget {
   const _AdminBookingsTab();
 
-  Stream<List<_AdminBooking>> _stream() {
-    return FirebaseFirestore.instance
-        .collectionGroup('items')
-        .snapshots()
-        .map((snapshot) {
-      final bookings = snapshot.docs
-          .where((doc) {
-        final data = doc.data();
-        return doc.reference.path.startsWith('bookings/') &&
-            data.containsKey('checkIn') &&
-            data.containsKey('package');
-      })
-          .map(_AdminBooking.fromDoc)
-          .toList();
+  @override
+  State<_AdminBookingsTab>
+  createState() =>
+      _AdminBookingsTabState();
+}
 
-      bookings.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-      return bookings;
-    });
+class _AdminBookingsTabState
+    extends State<_AdminBookingsTab> {
+
+  final AdminMySQLService _db =
+      AdminMySQLService.instance;
+
+  late final Stream<
+      List<_AdminBooking>> _bookingsStream;
+
+  bool _streamRunning = true;
+
+  @override
+  void initState() {
+    super.initState();
+
+    _bookingsStream =
+        _createBookingsStream();
+  }
+
+  // ============================================================
+  // MYSQL POLLING STREAM
+  // ============================================================
+
+  Stream<List<_AdminBooking>>
+  _createBookingsStream() async* {
+
+    while (_streamRunning) {
+      try {
+        // ADMIN gets ALL bookings from MySQL.
+        final rows =
+        await _db.fetchAllBookings();
+
+        final bookings = rows
+            .map(
+              (row) =>
+              _AdminBooking.fromRow(
+                row,
+              ),
+        )
+            .toList();
+
+        bookings.sort(
+              (a, b) =>
+              b.createdAt.compareTo(
+                a.createdAt,
+              ),
+        );
+
+        yield bookings;
+      } catch (e) {
+        debugPrint(
+          'Admin bookings MySQL error: $e',
+        );
+
+        yield* Stream.error(e);
+      }
+
+      await Future.delayed(
+        const Duration(seconds: 5),
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    _streamRunning = false;
+    super.dispose();
   }
 
   String _date(DateTime d) =>
       '${d.day.toString().padLeft(2, '0')}/'
-          '${d.month.toString().padLeft(2, '0')}/${d.year}';
+          '${d.month.toString().padLeft(2, '0')}/'
+          '${d.year}';
 
   @override
-  Widget build(BuildContext context) {
-    return StreamBuilder<List<_AdminBooking>>(
-      stream: _stream(),
-      builder: (context, snapshot) {
+  Widget build(
+      BuildContext context,
+      ) {
+    return StreamBuilder<
+        List<_AdminBooking>>(
+      stream: _bookingsStream,
+      builder: (
+          context,
+          snapshot,
+          ) {
         if (snapshot.connectionState == ConnectionState.waiting &&
             !snapshot.hasData) {
           return const Center(child: CircularProgressIndicator());
@@ -2187,28 +2386,46 @@ class _AdminBookingDetailPageState extends State<_AdminBookingDetailPage> {
           '${d.minute.toString().padLeft(2, '0')}';
 
   Future<void> _submitStatus() async {
-    setState(() => _saving = true);
+    if (_saving) return;
+
+    setState(
+          () => _saving = true,
+    );
+
     try {
-      // Updating this exact nested booking document makes the customer's
-      // existing BookingsController Firestore listener update automatically.
-      await booking.reference.update({'status': _status.value});
+      await AdminMySQLService
+          .instance
+          .updateBookingStatus(
+        booking.id,
+        _status.value,
+      );
 
       if (!mounted) return;
+
       _showAdminNotice(
         context,
-        'Booking status changed to ${_status.label}.',
-        type: _AdminNoticeType.success,
+        'Booking status changed to '
+            '${_status.label}.',
+        type:
+        _AdminNoticeType.success,
       );
+
       Navigator.pop(context);
     } catch (e) {
       if (!mounted) return;
+
       _showAdminNotice(
         context,
-        'Unable to update booking status. $e',
-        type: _AdminNoticeType.error,
+        'Unable to update booking status.\n$e',
+        type:
+        _AdminNoticeType.error,
       );
     } finally {
-      if (mounted) setState(() => _saving = false);
+      if (mounted) {
+        setState(
+              () => _saving = false,
+        );
+      }
     }
   }
 
@@ -2339,7 +2556,6 @@ class _AdminBookingDetailPageState extends State<_AdminBookingDetailPage> {
                       booking.selectedPackageOption!,
                       icon: Icons.tune_rounded,
                     ),
-                  // _row('User UID', booking.userId, icon: Icons.fingerprint_rounded),
                 ],
               ),
 
@@ -2368,6 +2584,12 @@ class _AdminBookingDetailPageState extends State<_AdminBookingDetailPage> {
                     (pkg['childPriceText'] ?? '').toString(),
                     icon: Icons.child_care_rounded,
                   ),
+                  if ((pkg['infantPriceText'] ?? '').toString().trim().isNotEmpty)
+                    _row(
+                      'Infant price',
+                      pkg['infantPriceText'].toString(),
+                      icon: Icons.baby_changing_station_rounded,
+                    ),
                   if ((pkg['about'] ?? '').toString().trim().isNotEmpty)
                     _row('About', pkg['about'].toString(), icon: Icons.info_outline_rounded),
                 ],
@@ -2626,6 +2848,7 @@ class _AdminPackageFormPageState extends State<AdminPackageFormPage>
   final _countryCtrl = TextEditingController(text: 'United Arab Emirates');
   final _adultPriceCtrl = TextEditingController();
   final _childPriceCtrl = TextEditingController();
+  final _infantPriceCtrl = TextEditingController();
   final _durationCtrl = TextEditingController();
 
   final List<TextEditingController> _faqCtrls =
@@ -2669,6 +2892,7 @@ class _AdminPackageFormPageState extends State<AdminPackageFormPage>
       _countryCtrl.text = e.country;
       _adultPriceCtrl.text = e.adultPriceText ?? e.priceText ?? '';
       _childPriceCtrl.text = e.childPriceText ?? '';
+      _infantPriceCtrl.text = e.infantPriceText ?? '';
       _durationCtrl.text = e.durationText ?? '';
       for (var i = 0; i < e.faqs.length && i < 5; i++) {
         _faqCtrls[i].text = e.faqs[i];
@@ -2693,6 +2917,7 @@ class _AdminPackageFormPageState extends State<AdminPackageFormPage>
     _countryCtrl.dispose();
     _adultPriceCtrl.dispose();
     _childPriceCtrl.dispose();
+    _infantPriceCtrl.dispose();
     _durationCtrl.dispose();
     for (final c in _faqCtrls) { c.dispose(); }
     for (final c in _inclusionCtrls) { c.dispose(); }
@@ -2827,6 +3052,7 @@ class _AdminPackageFormPageState extends State<AdminPackageFormPage>
         priceText: _adultPriceCtrl.text.trim().isEmpty ? null : _adultPriceCtrl.text.trim(),
         adultPriceText: _adultPriceCtrl.text.trim().isEmpty ? null : _adultPriceCtrl.text.trim(),
         childPriceText: _childPriceCtrl.text.trim().isEmpty ? null : _childPriceCtrl.text.trim(),
+        infantPriceText: _infantPriceCtrl.text.trim().isEmpty ? null : _infantPriceCtrl.text.trim(),
         faqs: _faqCtrls.map((c) => c.text.trim()).where((v) => v.isNotEmpty).take(5).toList(),
         inclusions: _inclusionCtrls.map((c) => c.text.trim()).where((v) => v.isNotEmpty).take(5).toList(),
         exclusions: _exclusionCtrls.map((c) => c.text.trim()).where((v) => v.isNotEmpty).take(5).toList(),
@@ -3051,6 +3277,12 @@ class _AdminPackageFormPageState extends State<AdminPackageFormPage>
                               decoration: _decoration('Child Price (e.g. AED 149)'),
                             )),
                           ]),
+                          const SizedBox(height: 12),
+                          TextFormField(
+                            controller: _infantPriceCtrl,
+                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                            decoration: _decoration('Infant Price (e.g. AED 49)'),
+                          ),
                           const SizedBox(height: 12),
                           TextFormField(controller: _durationCtrl, decoration: _decoration('Duration (e.g. 3 Nights/4 Days)')),
                         ]),

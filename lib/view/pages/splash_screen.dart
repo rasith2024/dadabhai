@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:math' as math;
 
-import 'package:dadabhaitravel/view/pages/dashboard.dart';
+import 'package:dadabhaitravel/view/pages/onboarding_screen.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -12,311 +14,319 @@ class SplashScreen extends StatefulWidget {
 
 class _SplashScreenState extends State<SplashScreen>
     with TickerProviderStateMixin {
-  late final AnimationController _logoController;
-  late final AnimationController _contentController;
+  late final AnimationController _controller;
 
-  late final Animation<double> _logoScale;
-  late final Animation<double> _logoFade;
+  static const Color dark = Color(0xFF032C60);
 
-  late final Animation<double> _contentFade;
-  late final Animation<Offset> _contentSlide;
-
-  static const Color dark = Color(0xff0F4C81);
-  static const Color primary = Color(0xff1C7ED6);
-  static const Color light = Color(0xff4DABF7);
+  static const _totalDuration = Duration(milliseconds: 2200);
+  static const _holdBeforeNav = Duration(milliseconds: 1300);
 
   @override
   void initState() {
     super.initState();
 
-    _logoController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 900),
-    );
-
-    _contentController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 800),
-    );
-
-    _logoScale = Tween<double>(
-      begin: .72,
-      end: 1,
-    ).animate(
-      CurvedAnimation(
-        parent: _logoController,
-        curve: Curves.easeOutBack,
+    SystemChrome.setSystemUIOverlayStyle(
+      const SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.light,
+        statusBarBrightness: Brightness.dark,
+        systemNavigationBarColor: Color(0xFF032C60),
+        systemNavigationBarIconBrightness: Brightness.light,
       ),
     );
 
-    _logoFade = CurvedAnimation(
-      parent: _logoController,
-      curve: Curves.easeOut,
-    );
+    _controller = AnimationController(
+      vsync: this,
+      duration: _totalDuration,
+    )..forward();
 
-    _contentFade = CurvedAnimation(
-      parent: _contentController,
-      curve: Curves.easeOut,
-    );
+    Timer(_totalDuration + _holdBeforeNav, _goToOnboarding);
+  }
 
-    _contentSlide = Tween<Offset>(
-      begin: const Offset(0, .20),
+  void _goToOnboarding() {
+    if (!mounted) return;
+
+    Navigator.pushReplacement(
+      context,
+      PageRouteBuilder(
+        pageBuilder: (_, animation, __) => const OnboardingScreen(),
+        transitionDuration: const Duration(milliseconds: 550),
+        transitionsBuilder: (_, animation, __, child) {
+          final curved = CurvedAnimation(
+            parent: animation,
+            curve: Curves.easeOutCubic,
+          );
+
+          return FadeTransition(
+            opacity: curved,
+            child: ScaleTransition(
+              scale: Tween<double>(
+                begin: .97,
+                end: 1.0,
+              ).animate(curved),
+              child: child,
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Animation<double> _fade(double start, double end) {
+    return CurvedAnimation(
+      parent: _controller,
+      curve: Interval(
+        start,
+        end,
+        curve: Curves.easeOut,
+      ),
+    );
+  }
+
+  Animation<Offset> _slide(
+      double start,
+      double end, {
+        double dy = .16,
+      }) {
+    return Tween<Offset>(
+      begin: Offset(0, dy),
       end: Offset.zero,
     ).animate(
       CurvedAnimation(
-        parent: _contentController,
-        curve: Curves.easeOutCubic,
+        parent: _controller,
+        curve: Interval(
+          start,
+          end,
+          curve: Curves.easeOutCubic,
+        ),
       ),
-    );
-
-    _logoController.forward();
-
-    Future.delayed(
-      const Duration(milliseconds: 450),
-          () {
-        if (mounted) {
-          _contentController.forward();
-        }
-      },
-    );
-
-    Timer(
-      const Duration(seconds: 4),
-          () {
-        if (!mounted) return;
-
-        Navigator.pushReplacement(
-          context,
-          PageRouteBuilder(
-            pageBuilder: (_, animation, __) =>
-            const DashboardScreen(),
-            transitionDuration:
-            const Duration(milliseconds: 650),
-            transitionsBuilder:
-                (_, animation, __, child) {
-              return FadeTransition(
-                opacity: animation,
-                child: child,
-              );
-            },
-          ),
-        );
-      },
     );
   }
 
   @override
   void dispose() {
-    _logoController.dispose();
-    _contentController.dispose();
+    _controller.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final size = MediaQuery.of(context).size;
+
+    final logoFade = _fade(0.00, 0.42);
+
+    final logoScale = CurvedAnimation(
+      parent: _controller,
+      curve: const Interval(
+        0.00,
+        0.52,
+        curve: Curves.easeOutBack,
+      ),
+    );
+
+    final titleFade = _fade(0.28, 0.62);
+    final titleSlide = _slide(0.28, 0.62);
+
+    final subtitleFade = _fade(0.40, 0.72);
+    final subtitleSlide = _slide(0.40, 0.72);
+
+    final featureFade = _fade(0.52, 0.86);
+    final featureSlide = _slide(
+      0.52,
+      0.86,
+      dy: .20,
+    );
+
+    final footerFade = _fade(0.72, 1.00);
+
     return Scaffold(
+      backgroundColor: dark,
       body: Stack(
         fit: StackFit.expand,
         children: [
-          // Background travel image
           Image.asset(
-            'assets/images/splash_bg.jpg',
+            'assets/images/bg.png',
             fit: BoxFit.cover,
+            alignment: Alignment.center,
+            errorBuilder: (_, __, ___) {
+              return Container(
+                color: dark,
+              );
+            },
           ),
 
-          // Dark blue overlay
           Container(
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
                 colors: [
-                  dark.withOpacity(.45),
-                  dark.withOpacity(.58),
-                  dark.withOpacity(.92),
+                  Colors.black.withOpacity(.02),
+                  Colors.transparent,
+                  Colors.black.withOpacity(.08),
                 ],
                 stops: const [
                   0,
-                  .45,
+                  .55,
                   1,
                 ],
               ),
             ),
           ),
 
-          // Decorative glow
-          Positioned(
-            top: -90,
-            right: -70,
-            child: Container(
-              width: 240,
-              height: 240,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: light.withOpacity(.12),
-              ),
-            ),
-          ),
-
-          Positioned(
-            bottom: 130,
-            left: -80,
-            child: Container(
-              width: 200,
-              height: 200,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: primary.withOpacity(.10),
-              ),
-            ),
-          ),
-
           SafeArea(
             child: Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 24,
-                vertical: 20,
+              padding: const EdgeInsets.fromLTRB(
+                24,
+                16,
+                24,
+                20,
               ),
               child: Column(
                 children: [
-                  const Spacer(),
+                  const Spacer(
+                    flex: 4,
+                  ),
 
-                  // Logo
-                  ScaleTransition(
-                    scale: _logoScale,
-                    child: FadeTransition(
-                      opacity: _logoFade,
-                      child: Container(
-                        width: MediaQuery.of(context).size.width,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 14,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(.96),
-                          borderRadius:
-                          BorderRadius.circular(24),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(.18),
-                              blurRadius: 24,
-                              offset: const Offset(0, 12),
-                            ),
-                          ],
-                        ),
-                        child: Image.asset(
-                          'assets/images/logo.png',
-                          fit: BoxFit.contain,
+                  // LOGO
+                  FadeTransition(
+                    opacity: logoFade,
+                    child: ScaleTransition(
+                      scale: logoScale,
+                      child: _LogoMark(
+                        size: size,
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(
+                    height: 18,
+                  ),
+
+                  // TITLE
+                  FadeTransition(
+                    opacity: titleFade,
+                    child: SlideTransition(
+                      position: titleSlide,
+                      child: Text(
+                        'Your Journey Begins Here',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize:
+                          size.width < 360 ? 24 : 28,
+                          fontWeight:
+                          FontWeight.w700,
+                          height: 1.15,
+                          letterSpacing: -.25,
                         ),
                       ),
                     ),
                   ),
 
-                  const SizedBox(height: 30),
+                  const SizedBox(
+                    height: 9,
+                  ),
 
+                  // SUB TITLE
                   FadeTransition(
-                    opacity: _contentFade,
+                    opacity: subtitleFade,
                     child: SlideTransition(
-                      position: _contentSlide,
-                      child: Column(
+                      position: subtitleSlide,
+                      child: Text(
+                        'Discover  •  Book  •  Explore',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color:
+                          Colors.white.withOpacity(.72),
+                          fontSize:
+                          size.width < 360 ? 13 : 15,
+                          fontWeight:
+                          FontWeight.w400,
+                          letterSpacing: 1.15,
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(
+                    height: 28,
+                  ),
+
+                  // FLIGHTS / HOTELS / TOURS
+                  FadeTransition(
+                    opacity: featureFade,
+                    child: SlideTransition(
+                      position: featureSlide,
+                      child: const Row(
+                        mainAxisAlignment:
+                        MainAxisAlignment.center,
                         children: [
-                          const Text(
-                            'Explore More.\nTravel Better.',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 30,
-                              height: 1.15,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: -.4,
-                            ),
+                          _SplashFeature(
+                            icon:
+                            Icons.flight_rounded,
+                            title: 'Flights',
                           ),
 
-                          const SizedBox(height: 12),
-
-                          Text(
-                            'Flights, holidays, tours and unforgettable experiences — all in one place.',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color:
-                              Colors.white.withOpacity(.82),
-                              fontSize: 13,
-                              height: 1.6,
-                              fontWeight: FontWeight.w400,
-                            ),
+                          SizedBox(
+                            width: 34,
                           ),
 
-                          const SizedBox(height: 22),
+                          _SplashFeature(
+                            icon:
+                            Icons.apartment_rounded,
+                            title: 'Hotels',
+                          ),
 
-                          Wrap(
-                            alignment: WrapAlignment.center,
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: const [
-                              _SplashChip(
-                                icon:
-                                Icons.flight_takeoff_rounded,
-                                text: 'Flights',
-                              ),
-                              _SplashChip(
-                                icon:
-                                Icons.beach_access_rounded,
-                                text: 'Holidays',
-                              ),
-                              _SplashChip(
-                                icon:
-                                Icons.explore_rounded,
-                                text: 'Tours',
-                              ),
-                            ],
+                          SizedBox(
+                            width: 34,
+                          ),
+
+                          _SplashFeature(
+                            icon:
+                            Icons.location_on_rounded,
+                            title: 'Tours',
                           ),
                         ],
                       ),
                     ),
                   ),
 
-                  const Spacer(),
+                  const Spacer(
+                    flex: 8,
+                  ),
 
+                  // BOTTOM LOADER
                   FadeTransition(
-                    opacity: _contentFade,
+                    opacity: footerFade,
                     child: Column(
+                      mainAxisSize:
+                      MainAxisSize.min,
                       children: [
+                        const _AnimatedLoadingBar(),
+
                         const SizedBox(
-                          width: 28,
-                          height: 28,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2.3,
-                            valueColor:
-                            AlwaysStoppedAnimation<Color>(
-                              Colors.white,
-                            ),
-                          ),
+                          height: 12,
                         ),
 
-                        const SizedBox(height: 14),
-
                         Text(
-                          'Preparing your journey...',
+                          'Loading your next adventure...',
+                          textAlign:
+                          TextAlign.center,
                           style: TextStyle(
                             color:
-                            Colors.white.withOpacity(.68),
+                            Colors.white.withOpacity(.86),
                             fontSize: 11.5,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-
-                        const SizedBox(height: 8),
-
-                        Text(
-                          'Dadabhai Travel LLC',
-                          style: TextStyle(
-                            color:
-                            Colors.white.withOpacity(.45),
-                            fontSize: 10.5,
+                            fontWeight:
+                            FontWeight.w500,
                           ),
                         ),
                       ],
                     ),
+                  ),
+
+                  const SizedBox(
+                    height: 8,
                   ),
                 ],
               ),
@@ -328,47 +338,231 @@ class _SplashScreenState extends State<SplashScreen>
   }
 }
 
-class _SplashChip extends StatelessWidget {
-  final IconData icon;
-  final String text;
+class _LogoMark extends StatelessWidget {
+  final Size size;
 
-  const _SplashChip({
-    required this.icon,
-    required this.text,
+  const _LogoMark({
+    required this.size,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: 13,
-        vertical: 8,
-      ),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(.12),
-        borderRadius: BorderRadius.circular(30),
-        border: Border.all(
-          color: Colors.white.withOpacity(.18),
+    final logoWidth =
+    math.min(
+      size.width * .74,
+      330.0,
+    );
+
+    final logoHeight =
+        logoWidth * .38;
+
+    return SizedBox(
+      width: logoWidth,
+      height: logoHeight,
+      child: ColorFiltered(
+        colorFilter:
+        const ColorFilter.mode(
+          Colors.white,
+          BlendMode.srcIn,
+        ),
+        child: Image.asset(
+          'assets/images/logo.png',
+          fit: BoxFit.contain,
+          errorBuilder:
+              (_, __, ___) {
+            return Center(
+              child: Icon(
+                Icons.flight_takeoff_rounded,
+                color: Colors.white,
+                size:
+                logoHeight * .70,
+              ),
+            );
+          },
         ),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
+    );
+  }
+}
+
+class _SplashFeature
+    extends StatelessWidget {
+  final IconData icon;
+  final String title;
+
+  const _SplashFeature({
+    required this.icon,
+    required this.title,
+  });
+
+  @override
+  Widget build(
+      BuildContext context,
+      ) {
+    return Column(
+      mainAxisSize:
+      MainAxisSize.min,
+      children: [
+        Container(
+          width: 58,
+          height: 58,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+
+            color:
+            Colors.white.withOpacity(
+              .035,
+            ),
+
+            border: Border.all(
+              color:
+              Colors.white.withOpacity(
+                .75,
+              ),
+              width: 1.6,
+            ),
+
+            boxShadow: [
+              BoxShadow(
+                color:
+                Colors.black.withOpacity(
+                  .08,
+                ),
+                blurRadius: 10,
+                offset:
+                const Offset(
+                  0,
+                  4,
+                ),
+              ),
+            ],
+          ),
+
+          child: Icon(
             icon,
-            size: 15,
+            size: 28,
             color: Colors.white,
           ),
-          const SizedBox(width: 6),
-          Text(
-            text,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 11.5,
-              fontWeight: FontWeight.w600,
-            ),
+        ),
+
+        const SizedBox(
+          height: 8,
+        ),
+
+        Text(
+          title,
+          style:
+          const TextStyle(
+            color: Colors.white,
+            fontSize: 12.5,
+            fontWeight:
+            FontWeight.w500,
+            letterSpacing: .1,
           ),
-        ],
+        ),
+      ],
+    );
+  }
+}
+
+class _AnimatedLoadingBar
+    extends StatefulWidget {
+  const _AnimatedLoadingBar();
+
+  @override
+  State<_AnimatedLoadingBar>
+  createState() =>
+      _AnimatedLoadingBarState();
+}
+
+class _AnimatedLoadingBarState
+    extends State<_AnimatedLoadingBar>
+    with
+        SingleTickerProviderStateMixin {
+  late final AnimationController
+  _loadingController;
+
+  @override
+  void initState() {
+    super.initState();
+
+    _loadingController =
+    AnimationController(
+      vsync: this,
+      duration:
+      const Duration(
+        milliseconds: 1500,
+      ),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _loadingController.dispose();
+
+    super.dispose();
+  }
+
+  @override
+  Widget build(
+      BuildContext context,
+      ) {
+    return SizedBox(
+      width: 145,
+      height: 5,
+
+      child: AnimatedBuilder(
+        animation:
+        _loadingController,
+
+        builder:
+            (_, __) {
+          return ClipRRect(
+            borderRadius:
+            BorderRadius.circular(
+              100,
+            ),
+
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child:
+                  Container(
+                    color:
+                    Colors.white.withOpacity(
+                      .25,
+                    ),
+                  ),
+                ),
+
+                FractionallySizedBox(
+                  widthFactor: .42,
+
+                  alignment:
+                  Alignment(
+                    -1 +
+                        (2 *
+                            _loadingController.value),
+                    0,
+                  ),
+
+                  child:
+                  Container(
+                    decoration:
+                    BoxDecoration(
+                      color:
+                      Colors.white,
+                      borderRadius:
+                      BorderRadius.circular(
+                        100,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
       ),
     );
   }

@@ -1,18 +1,21 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ui';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:dadabhaitravel/view/pages/user_data_mysql_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:dadabhaitravel/view/pages/about_us.dart';
 import 'package:dadabhaitravel/view/pages/admin/admin_package.dart';
 import 'package:dadabhaitravel/view/pages/admin/admin_package_service.dart';
 import 'package:dadabhaitravel/view/pages/profile_page.dart';
 import 'package:flutter/material.dart';
 
+
+part 'wishlist_tab.dart';
+part 'bookings_tab.dart';
 class LogoColors {
   static const dark = Color(0xff0F4C81); // Replace with logo dark color
   static const primary = Color(0xff1C7ED6); // Replace with logo primary color
   static const light = Color(0xff4DABF7); // Replace with logo light color
-  static const bg = Color(0xffF5F8FC);
+  static const bg = Color(0xffF7F9FC);
 }
 
 
@@ -208,394 +211,12 @@ class _PrettyDropdown<T> extends StatelessWidget {
 /// ===========================================================================
 /// WISHLIST (GLOBAL STATE)
 /// ===========================================================================
-class WishlistItem {
-  final String id;
-  final String title;
-  final String subtitle;
-  final String? imageUrl;
-  final _TravelPackage package;
 
-  const WishlistItem({
-    required this.id,
-    required this.title,
-    required this.subtitle,
-    required this.imageUrl,
-    required this.package,
-  });
-}
-
-class WishlistController extends ChangeNotifier {
-  WishlistController._() {
-    _start();
-  }
-  static final WishlistController instance = WishlistController._();
-
-  final Map<String, WishlistItem> _items = {};
-  final FirebaseFirestore _db = FirebaseFirestore.instance;
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _subscription;
-  bool _loading = true;
-
-  List<WishlistItem> get items => _items.values.toList();
-  int get count => _items.length;
-  bool get loading => _loading;
-
-  bool isSaved(String id) => _items.containsKey(id);
-
-  String _docId(String id) => id.replaceAll('/', '_');
-
-  Future<User> _ensureUser() async {
-    final existing = _auth.currentUser;
-    if (existing != null) return existing;
-    final credential = await _auth.signInAnonymously();
-    return credential.user!;
-  }
-
-  CollectionReference<Map<String, dynamic>> _wishlistCol(String uid) =>
-      _db.collection('wishlists').doc(uid).collection('items');
-
-  Future<void> _start() async {
-    try {
-      final user = await _ensureUser();
-      await _subscription?.cancel();
-      _subscription = _wishlistCol(user.uid)
-          .orderBy('savedAt', descending: true)
-          .snapshots()
-          .listen((snapshot) {
-        _items
-          ..clear()
-          ..addEntries(snapshot.docs.map((doc) {
-            final data = doc.data();
-            final package = _TravelPackage.fromWishlistMap(data);
-            final item = WishlistItem(
-              id: data['packageId'] ?? package.heroTitle,
-              title: data['title'] ?? package.title,
-              subtitle: data['subtitle'] ?? package.durationText ?? package.country,
-              imageUrl: data['imageUrl'],
-              package: package,
-            );
-            return MapEntry(item.id, item);
-          }));
-        _loading = false;
-        notifyListeners();
-      }, onError: (Object error) {
-        _loading = false;
-        debugPrint('Wishlist Firestore error: $error');
-        notifyListeners();
-      });
-    } catch (e) {
-      _loading = false;
-      debugPrint('Wishlist start error: $e');
-      notifyListeners();
-    }
-  }
-
-  Future<void> toggle(WishlistItem item) async {
-    if (isSaved(item.id)) {
-      await remove(item.id);
-    } else {
-      await add(item);
-    }
-  }
-
-  Future<void> add(WishlistItem item) async {
-    final user = await _ensureUser();
-    // Optimistic UI update; Firestore snapshot remains the source of truth.
-    _items[item.id] = item;
-    notifyListeners();
-    try {
-      await _wishlistCol(user.uid).doc(_docId(item.id)).set({
-        'packageId': item.id,
-        'title': item.title,
-        'subtitle': item.subtitle,
-        'imageUrl': item.imageUrl,
-        ...item.package.toWishlistMap(),
-        'savedAt': FieldValue.serverTimestamp(),
-      });
-    } catch (e) {
-      _items.remove(item.id);
-      notifyListeners();
-      rethrow;
-    }
-  }
-
-  Future<void> remove(String id) async {
-    final user = await _ensureUser();
-    final previous = _items.remove(id);
-    notifyListeners();
-    try {
-      await _wishlistCol(user.uid).doc(_docId(id)).delete();
-    } catch (e) {
-      if (previous != null) _items[id] = previous;
-      notifyListeners();
-      rethrow;
-    }
-  }
-
-  @override
-  void dispose() {
-    _subscription?.cancel();
-    super.dispose();
-  }
-}
 
 /// ===========================================================================
 /// BOOKINGS (GLOBAL STATE)
 /// ===========================================================================
-enum BookingStatus { pending, confirmed, cancelled }
 
-extension BookingStatusX on BookingStatus {
-  String get value {
-    switch (this) {
-      case BookingStatus.pending:
-        return 'pending';
-      case BookingStatus.confirmed:
-        return 'confirmed';
-      case BookingStatus.cancelled:
-        return 'cancelled';
-    }
-  }
-
-  static BookingStatus fromValue(String? value) {
-    switch (value) {
-      case 'confirmed':
-        return BookingStatus.confirmed;
-      case 'cancelled':
-        return BookingStatus.cancelled;
-      case 'pending':
-      default:
-        return BookingStatus.pending;
-    }
-  }
-
-  String get label {
-    switch (this) {
-      case BookingStatus.pending:
-        return 'Pending Confirmation';
-      case BookingStatus.confirmed:
-        return 'Confirmed';
-      case BookingStatus.cancelled:
-        return 'Cancelled';
-    }
-  }
-
-  IconData get icon {
-    switch (this) {
-      case BookingStatus.pending:
-        return Icons.hourglass_top_rounded;
-      case BookingStatus.confirmed:
-        return Icons.verified_rounded;
-      case BookingStatus.cancelled:
-        return Icons.cancel_rounded;
-    }
-  }
-
-  Color get color {
-    switch (this) {
-      case BookingStatus.pending:
-        return const Color(0xffFFA033);
-      case BookingStatus.confirmed:
-        return const Color(0xff23B26D);
-      case BookingStatus.cancelled:
-        return const Color(0xffFF5C5C);
-    }
-  }
-}
-
-class BookingItem {
-  final String id;
-  final _TravelPackage package;
-  final String name;
-  final String email;
-  final String mobile;
-  final DateTime checkIn;
-  final int adults;
-  final int children;
-  final String? selectedPackageOption;
-  final DateTime createdAt;
-  BookingStatus status;
-
-  BookingItem({
-    required this.id,
-    required this.package,
-    required this.name,
-    required this.email,
-    required this.mobile,
-    required this.checkIn,
-    required this.adults,
-    required this.children,
-    this.selectedPackageOption,
-    this.status = BookingStatus.pending,
-    DateTime? createdAt,
-  }) : createdAt = createdAt ?? DateTime.now();
-
-  Map<String, dynamic> toFirestoreMap() => {
-    'name': name,
-    'email': email,
-    'mobile': mobile,
-    'checkIn': Timestamp.fromDate(checkIn),
-    'adults': adults,
-    'children': children,
-    'selectedPackageOption': selectedPackageOption,
-    'status': status.value,
-    // Keep a complete package snapshot so Bookings can reopen the same
-    // detail page even when the admin later edits or deletes the package.
-    'package': package.toWishlistMap(),
-    'createdAt': FieldValue.serverTimestamp(),
-  };
-
-  factory BookingItem.fromFirestore(
-      DocumentSnapshot<Map<String, dynamic>> doc,
-      ) {
-    final data = doc.data() ?? <String, dynamic>{};
-    final rawPackage = data['package'];
-    final packageMap = rawPackage is Map
-        ? Map<String, dynamic>.from(rawPackage)
-        : <String, dynamic>{};
-
-    return BookingItem(
-      id: doc.id,
-      package: _TravelPackage.fromWishlistMap(packageMap),
-      name: data['name'] ?? '',
-      email: data['email'] ?? '',
-      mobile: data['mobile'] ?? '',
-      checkIn: data['checkIn'] is Timestamp
-          ? (data['checkIn'] as Timestamp).toDate()
-          : DateTime.now(),
-      adults: (data['adults'] as num?)?.toInt() ?? 1,
-      children: (data['children'] as num?)?.toInt() ?? 0,
-      selectedPackageOption: data['selectedPackageOption'],
-      status: BookingStatusX.fromValue(data['status'] as String?),
-      createdAt: data['createdAt'] is Timestamp
-          ? (data['createdAt'] as Timestamp).toDate()
-          : DateTime.now(),
-    );
-  }
-}
-
-class BookingsController extends ChangeNotifier {
-  BookingsController._() {
-    _start();
-  }
-  static final BookingsController instance = BookingsController._();
-
-  final List<BookingItem> _bookings = [];
-  final FirebaseFirestore _db = FirebaseFirestore.instance;
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _subscription;
-
-  List<BookingItem> get bookings => List.unmodifiable(_bookings);
-  int get count => _bookings.length;
-
-  String _docId(String id) => id.replaceAll('/', '_');
-
-  Future<User?> _ensureUser() async {
-    try {
-      final existing = _auth.currentUser;
-      if (existing != null) return existing;
-
-      final credential = await _auth.signInAnonymously();
-      return credential.user;
-    } on FirebaseAuthException catch (e) {
-      debugPrint('Bookings Firebase Auth error: ${e.code} - ${e.message}');
-      return null;
-    } catch (e) {
-      debugPrint('Bookings auth error: $e');
-      return null;
-    }
-  }
-
-  CollectionReference<Map<String, dynamic>> _bookingsCol(String uid) =>
-      _db.collection('bookings').doc(uid).collection('items');
-
-  Future<void> _start() async {
-    final user = await _ensureUser();
-    if (user == null) return;
-
-    try {
-      await _subscription?.cancel();
-
-      _subscription = _bookingsCol(user.uid)
-          .orderBy('createdAt', descending: true)
-          .snapshots()
-          .listen(
-            (snapshot) {
-          _bookings
-            ..clear()
-            ..addAll(snapshot.docs.map(BookingItem.fromFirestore));
-          notifyListeners();
-        },
-        onError: (Object error) {
-          debugPrint('Bookings Firestore error: $error');
-        },
-      );
-    } catch (e) {
-      debugPrint('Bookings start error: $e');
-    }
-  }
-
-  Future<void> add(BookingItem item) async {
-    final user = await _ensureUser();
-    if (user == null) {
-      throw StateError(
-        'Firebase user is unavailable. Booking was not saved.',
-      );
-    }
-
-    final id = _docId(item.id);
-
-    // Optimistic update keeps the current UI responsive. The Firestore
-    // snapshot immediately replaces this with the persisted version.
-    _bookings.insert(0, item);
-    notifyListeners();
-
-    try {
-      await _bookingsCol(user.uid).doc(id).set(item.toFirestoreMap());
-    } catch (e) {
-      _bookings.removeWhere((b) => b.id == item.id);
-      notifyListeners();
-      rethrow;
-    }
-  }
-
-  Future<void> updateStatus(String id, BookingStatus status) async {
-    final user = await _ensureUser();
-    if (user == null) return;
-
-    final index = _bookings.indexWhere((b) => b.id == id);
-    BookingStatus? previous;
-
-    if (index != -1) {
-      previous = _bookings[index].status;
-      _bookings[index].status = status;
-      notifyListeners();
-    }
-
-    try {
-      await _bookingsCol(user.uid).doc(_docId(id)).update({
-        'status': status.value,
-      });
-    } catch (e) {
-      if (index != -1 && previous != null) {
-        _bookings[index].status = previous;
-        notifyListeners();
-      }
-      rethrow;
-    }
-  }
-
-  Future<void> remove(String id) async {
-    final user = await _ensureUser();
-    if (user == null) return;
-    await _bookingsCol(user.uid).doc(_docId(id)).delete();
-  }
-
-  @override
-  void dispose() {
-    _subscription?.cancel();
-    super.dispose();
-  }
-}
 
 /// ===========================================================================
 /// SHARED ANIMATION HELPERS
@@ -834,29 +455,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return Scaffold(
       backgroundColor: LogoColors.bg,
       extendBodyBehindAppBar: false,
-      // appBar: AppBar(
-      //   elevation: 0,
-      //   backgroundColor: LogoColors.dark,
-      //   automaticallyImplyLeading: false,
-      //   title: Text(
-      //     _items[_currentIndex].label,
-      //     style: const TextStyle(
-      //       color: Colors.white,
-      //       fontWeight: FontWeight.w600,
-      //     ),
-      //   ),
-      //   actions: [
-      //     IconButton(
-      //       onPressed: () {
-      //         Navigator.push(
-      //             context, MaterialPageRoute(builder: (context) => AboutUs()));
-      //       },
-      //       icon: const Icon(Icons.info),
-      //       color: Colors.white,
-      //     )
-      //   ],
-      //   centerTitle: true,
-      // ),
       body: SafeArea(
         child: AnimatedSwitcher(
           duration: const Duration(milliseconds: 320),
@@ -907,102 +505,78 @@ class _AnimatedBottomNav extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.fromLTRB(20, 0, 20, 30),
-      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(26),
-        boxShadow: [
-          BoxShadow(
-            color: LogoColors.dark.withOpacity(.15),
-            blurRadius: 20,
-            offset: const Offset(0, 8),
+    return Material(
+      color: Colors.white,
+      elevation: 18,
+      shadowColor: LogoColors.dark.withOpacity(.10),
+      child: SafeArea(
+        top: false,
+        child: Container(
+          height: 68,
+          padding: const EdgeInsets.fromLTRB(8, 7, 8, 6),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            border: Border(
+              top: BorderSide(
+                color: LogoColors.dark.withOpacity(.06),
+              ),
+            ),
           ),
-        ],
-      ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final itemWidth = constraints.maxWidth / items.length;
-          return Stack(
-            children: [
-              AnimatedPositioned(
-                duration: const Duration(milliseconds: 300),
-                curve: Curves.easeOutCubic,
-                left: itemWidth * currentIndex,
-                top: 0,
-                bottom: 0,
-                width: itemWidth,
-                child: Center(
-                  child: Container(
-                    width: itemWidth,
-                    height: 52,
+          child: Row(
+            children: List.generate(items.length, (index) {
+              final selected = index == currentIndex;
+              final item = items[index];
+
+              return Expanded(
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(18),
+                  onTap: () => onTap(index),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 260),
+                    curve: Curves.easeOutCubic,
+                    margin: const EdgeInsets.symmetric(horizontal: 2),
                     decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(20),
-                      gradient: const LinearGradient(
-                        colors: [LogoColors.primary, LogoColors.light],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: LogoColors.primary.withOpacity(.35),
-                          blurRadius: 14,
-                          offset: const Offset(0, 6),
+                      color: selected
+                          ? LogoColors.primary.withOpacity(.10)
+                          : Colors.transparent,
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        AnimatedScale(
+                          scale: selected ? 1.08 : 1,
+                          duration: const Duration(milliseconds: 220),
+                          curve: Curves.easeOutBack,
+                          child: Icon(
+                            item.icon,
+                            size: 23,
+                            color: selected
+                                ? LogoColors.primary
+                                : LogoColors.dark.withOpacity(.42),
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        AnimatedDefaultTextStyle(
+                          duration: const Duration(milliseconds: 220),
+                          style: TextStyle(
+                            fontSize: 10.5,
+                            fontWeight:
+                            selected ? FontWeight.w800 : FontWeight.w600,
+                            color: selected
+                                ? LogoColors.primary
+                                : LogoColors.dark.withOpacity(.42),
+                          ),
+                          child: Text(item.label),
                         ),
                       ],
                     ),
                   ),
                 ),
-              ),
-              Row(
-                children: List.generate(items.length, (index) {
-                  final selected = index == currentIndex;
-                  final item = items[index];
-                  return Expanded(
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(20),
-                      onTap: () => onTap(index),
-                      child: SizedBox(
-                        height: 52,
-                        child: AnimatedDefaultTextStyle(
-                          duration: const Duration(milliseconds: 250),
-                          style: TextStyle(
-                            fontSize: selected ? 11.5 : 11,
-                            fontWeight:
-                            selected ? FontWeight.w700 : FontWeight.w500,
-                            color: selected
-                                ? Colors.white
-                                : LogoColors.dark.withOpacity(.55),
-                          ),
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              AnimatedScale(
-                                duration: const Duration(milliseconds: 250),
-                                scale: selected ? 1.15 : 1.0,
-                                curve: Curves.easeOutBack,
-                                child: Icon(
-                                  item.icon,
-                                  size: 22,
-                                  color: selected
-                                      ? Colors.white
-                                      : LogoColors.dark.withOpacity(.55),
-                                ),
-                              ),
-                              const SizedBox(height: 3),
-                              Text(item.label),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  );
-                }),
-              ),
-            ],
-          );
-        },
+              );
+            }),
+          ),
+        ),
       ),
     );
   }
@@ -1020,7 +594,7 @@ class _HomeTab extends StatefulWidget {
 }
 
 class _HomeTabState extends State<_HomeTab> {
-  final PageController _heroController = PageController(viewportFraction: .92);
+  final PageController _heroController = PageController(viewportFraction: .90);
   int _heroIndex = 0;
 
   late final Stream<List<AdminPackage>> _inboundStream =
@@ -1041,7 +615,13 @@ class _HomeTabState extends State<_HomeTab> {
 
   Widget _homeLoading({double height = 180}) => SizedBox(
     height: height,
-    child: const Center(child: CircularProgressIndicator()),
+    child: const Center(
+      child: SizedBox(
+        width: 28,
+        height: 28,
+        child: CircularProgressIndicator(strokeWidth: 2.4),
+      ),
+    ),
   );
 
   Widget _homeEmpty(String message, {double height = 120}) => SizedBox(
@@ -1061,15 +641,110 @@ class _HomeTabState extends State<_HomeTab> {
   @override
   Widget build(BuildContext context) {
     return ListView(
-      padding: const EdgeInsets.only(bottom: 100, top: 14),
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.only(bottom: 34),
       children: [
-        const _SearchBar(),
-        const SizedBox(height: 18),
+        // Native app header
+        Padding(
+          padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
+          child: Row(
+            children: [
+              Container(
+                width: 46,
+                height: 46,
+                padding: const EdgeInsets.all(3),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [LogoColors.dark, LogoColors.primary],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [
+                    BoxShadow(
+                      color: LogoColors.primary.withOpacity(.18),
+                      blurRadius: 16,
+                      offset: const Offset(0, 7),
+                    ),
+                  ],
+                ),
+                child: ColorFiltered(
+                  colorFilter:
+                  const ColorFilter.mode(
+                    Colors.white,
+                    BlendMode.srcIn,
+                  ),
+                  child: Image.asset(
+                    'assets/images/logo.png',
+                    fit: BoxFit.contain,
+                    errorBuilder:
+                        (_, __, ___) {
+                      return Center(
+                        child: Icon(
+                          Icons.flight_takeoff_rounded,
+                          color: Colors.white,
+                          size:
+                          30,
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+              const SizedBox(width: 11),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Dadabhai Travel',
+                      style: TextStyle(
+                        color: LogoColors.dark,
+                        fontSize: 17,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: -.25,
+                      ),
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      'Explore more. Travel better.',
+                      style: TextStyle(
+                        color: Color(0xff73879A),
+                        fontSize: 10.8,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: LogoColors.dark.withOpacity(.06),
+                  ),
+                ),
+                child: Icon(
+                  Icons.notifications_none_rounded,
+                  size: 21,
+                  color: LogoColors.dark.withOpacity(.70),
+                ),
+              ),
+            ],
+          ),
+        ),
 
-        // Keep only the three requested top tabs.
+        const _SearchBar(),
+        const SizedBox(height: 20),
+
+        // Native category shortcuts
         SizedBox(
-          height: 84,
+          height: 110,
           child: ListView(
+            physics: const BouncingScrollPhysics(),
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.symmetric(horizontal: 18),
             children: [
@@ -1078,27 +753,27 @@ class _HomeTabState extends State<_HomeTab> {
                 axis: Axis.horizontal,
                 child: _QuickLinkIcon(
                   label: 'InBound',
-                  icon: Icons.holiday_village_rounded,
+                  icon: Icons.location_city_rounded,
                   onTap: () => Navigator.push(
                     context,
                     MaterialPageRoute(builder: (_) => const _InboundPage()),
                   ),
                 ),
               ),
-              const SizedBox(width: 14),
+              const SizedBox(width: 11),
               _AnimatedEntrance(
                 index: 1,
                 axis: Axis.horizontal,
                 child: _QuickLinkIcon(
                   label: 'Holidays',
-                  icon: Icons.flight_takeoff,
+                  icon: Icons.flight_takeoff_rounded,
                   onTap: () => Navigator.push(
                     context,
                     MaterialPageRoute(builder: (_) => const _HolidaysPage()),
                   ),
                 ),
               ),
-              const SizedBox(width: 14),
+              const SizedBox(width: 11),
               _AnimatedEntrance(
                 index: 2,
                 axis: Axis.horizontal,
@@ -1115,136 +790,163 @@ class _HomeTabState extends State<_HomeTab> {
           ),
         ),
 
-        const SizedBox(height: 14),
+        const SizedBox(height: 8),
 
-        // Existing hero design is unchanged.
+        // Immersive mobile hero
         SizedBox(
-          height: 190,
-          child: AnimatedBuilder(
-            animation: _heroController,
-            builder: (context, _) {
-              return PageView.builder(
-                controller: _heroController,
-                itemCount: _heroImages.length,
-                onPageChanged: (i) => setState(() => _heroIndex = i),
-                itemBuilder: (context, index) {
+          height: 224,
+          child: PageView.builder(
+            controller: _heroController,
+            physics: const BouncingScrollPhysics(),
+            itemCount: _heroImages.length,
+            onPageChanged: (i) => setState(() => _heroIndex = i),
+            itemBuilder: (context, index) {
+              return AnimatedBuilder(
+                animation: _heroController,
+                builder: (context, child) {
                   double scale = 1;
                   if (_heroController.position.haveDimensions) {
                     final page = _heroController.page ??
                         _heroController.initialPage.toDouble();
-                    scale =
-                        (1 - ((page - index).abs() * .06)).clamp(.94, 1.0);
+                    scale = (1 - ((page - index).abs() * .045))
+                        .clamp(.955, 1.0);
                   }
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 6),
-                    child: Transform.scale(
-                      scale: scale,
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(24),
-                        child: Stack(
-                          fit: StackFit.expand,
-                          children: [
-                            Image.network(
-                              _heroImages[index],
-                              fit: BoxFit.cover,
-                              errorBuilder: (_, __, ___) => Container(
-                                color: LogoColors.dark,
-                                child: const Icon(
-                                  Icons.image_rounded,
-                                  color: Colors.white54,
-                                  size: 40,
-                                ),
-                              ),
-                            ),
-                            Container(
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  begin: Alignment.topCenter,
-                                  end: Alignment.bottomCenter,
-                                  colors: [
-                                    Colors.transparent,
-                                    LogoColors.dark.withOpacity(.8),
-                                  ],
-                                ),
-                              ),
-                            ),
-                            Positioned(
-                              left: 18,
-                              right: 18,
-                              bottom: 16,
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 9,
-                                      vertical: 4,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: LogoColors.primary,
-                                      borderRadius: BorderRadius.circular(20),
-                                    ),
-                                    child: const Text(
-                                      'FEATURED',
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 9.5,
-                                        fontWeight: FontWeight.w800,
-                                        letterSpacing: .6,
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  const Text(
-                                    'Unlock your personal adventure in the UAE',
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w700,
-                                      height: 1.3,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  );
+                  return Transform.scale(scale: scale, child: child);
                 },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(28),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        Image.network(
+                          _heroImages[index],
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => Container(
+                            color: LogoColors.dark,
+                            child: const Icon(
+                              Icons.landscape_rounded,
+                              color: Colors.white54,
+                              size: 42,
+                            ),
+                          ),
+                        ),
+                        Container(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                Colors.black.withOpacity(.05),
+                                Colors.transparent,
+                                Colors.black.withOpacity(.76),
+                              ],
+                              stops: const [0, .42, 1],
+                            ),
+                          ),
+                        ),
+                        Positioned(
+                          left: 18,
+                          top: 17,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(.94),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.auto_awesome_rounded,
+                                  color: LogoColors.primary,
+                                  size: 13,
+                                ),
+                                SizedBox(width: 5),
+                                Text(
+                                  'FEATURED',
+                                  style: TextStyle(
+                                    color: LogoColors.dark,
+                                    fontSize: 9.5,
+                                    fontWeight: FontWeight.w900,
+                                    letterSpacing: .45,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const Positioned(
+                          left: 18,
+                          right: 26,
+                          bottom: 21,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Discover the best of UAE',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 22,
+                                  height: 1.08,
+                                  fontWeight: FontWeight.w900,
+                                  letterSpacing: -.35,
+                                ),
+                              ),
+                              SizedBox(height: 7),
+                              Text(
+                                'Curated tours, activities and unforgettable moments.',
+                                style: TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 11.5,
+                                  height: 1.35,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
               );
             },
           ),
         ),
+
         const SizedBox(height: 10),
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: List.generate(_heroImages.length, (i) {
             final active = i == _heroIndex;
             return AnimatedContainer(
-              duration: const Duration(milliseconds: 250),
+              duration: const Duration(milliseconds: 240),
+              curve: Curves.easeOut,
               margin: const EdgeInsets.symmetric(horizontal: 3),
-              width: active ? 18 : 6,
+              width: active ? 20 : 6,
               height: 6,
               decoration: BoxDecoration(
                 color: active
                     ? LogoColors.primary
-                    : LogoColors.dark.withOpacity(.18),
-                borderRadius: BorderRadius.circular(4),
+                    : LogoColors.dark.withOpacity(.14),
+                borderRadius: BorderRadius.circular(8),
               ),
             );
           }),
         ),
 
-        const SizedBox(height: 26),
-
-        // UAE Activities now comes ONLY from Firebase Inbound packages.
+        const SizedBox(height: 28),
         const _SectionTitle(
-          'UAE Tours and Activities',
-          subtitle: 'Top-rated things to do',
+          'UAE Tours & Activities',
+          subtitle: 'Popular experiences picked for you',
         ),
         const SizedBox(height: 14),
+
         StreamBuilder<List<AdminPackage>>(
           stream: _inboundStream,
           builder: (context, snap) {
@@ -1259,24 +961,27 @@ class _HomeTabState extends State<_HomeTab> {
             if (items.isEmpty) {
               return _homeEmpty('No UAE activities have been added yet.');
             }
+
             return Padding(
               padding: const EdgeInsets.symmetric(horizontal: 18),
               child: GridView.builder(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
                 itemCount: items.length,
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                gridDelegate:
+                const SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: 2,
                   mainAxisSpacing: 14,
                   crossAxisSpacing: 14,
-                  childAspectRatio: .8,
+                  childAspectRatio: .73,
                 ),
                 itemBuilder: (context, index) {
                   final pkg = _travelPackageFromAdmin(items[index]);
                   return _AnimatedEntrance(
                     index: index,
                     child: _ExperienceCard(
-                      imageUrl: pkg.images.isNotEmpty ? pkg.images.first : null,
+                      imageUrl:
+                      pkg.images.isNotEmpty ? pkg.images.first : null,
                       title: pkg.title,
                       subtitle: pkg.durationText ?? pkg.country,
                       priceText: pkg.priceText,
@@ -1284,7 +989,8 @@ class _HomeTabState extends State<_HomeTab> {
                       onTap: () => Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => _PackageDetailPage(package: pkg),
+                          builder: (_) =>
+                              _PackageDetailPage(package: pkg),
                         ),
                       ),
                     ),
@@ -1295,20 +1001,19 @@ class _HomeTabState extends State<_HomeTab> {
           },
         ),
 
-        const SizedBox(height: 28),
-
-        // Explore keeps the same destination-card design, but Holiday data is Firebase-only.
+        const SizedBox(height: 30),
         const _SectionTitle(
           'Explore The World',
-          subtitle: 'Holiday packages, handpicked for you',
+          subtitle: 'Holiday packages handpicked for you',
         ),
         const SizedBox(height: 14),
+
         StreamBuilder<List<AdminPackage>>(
           stream: _holidaysStream,
           builder: (context, snap) {
             if (snap.connectionState == ConnectionState.waiting &&
                 !snap.hasData) {
-              return _homeLoading(height: 168);
+              return _homeLoading(height: 184);
             }
             if (snap.hasError) {
               return _homeEmpty('Unable to load holiday packages right now.');
@@ -1317,9 +1022,11 @@ class _HomeTabState extends State<_HomeTab> {
             if (items.isEmpty) {
               return _homeEmpty('No holiday packages have been added yet.');
             }
+
             return SizedBox(
-              height: 168,
+              height: 184,
               child: ListView.builder(
+                physics: const BouncingScrollPhysics(),
                 scrollDirection: Axis.horizontal,
                 padding: const EdgeInsets.symmetric(horizontal: 18),
                 itemCount: items.length,
@@ -1334,13 +1041,15 @@ class _HomeTabState extends State<_HomeTab> {
                       ),
                       child: _DestinationChipCard(
                         label: pkg.title,
-                        imageUrl: pkg.images.isNotEmpty ? pkg.images.first : '',
+                        imageUrl:
+                        pkg.images.isNotEmpty ? pkg.images.first : '',
                         priceText: pkg.priceText,
                         package: pkg,
                         onTap: () => Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (_) => _PackageDetailPage(package: pkg),
+                            builder: (_) =>
+                                _PackageDetailPage(package: pkg),
                           ),
                         ),
                       ),
@@ -1352,9 +1061,13 @@ class _HomeTabState extends State<_HomeTab> {
           },
         ),
 
-        const SizedBox(height: 28),
-        const _SectionTitle('Services'),
+        const SizedBox(height: 30),
+        const _SectionTitle(
+          'Travel Services',
+          subtitle: 'Everything you need for your next journey',
+        ),
         const SizedBox(height: 14),
+
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 18),
           child: GridView.count(
@@ -1363,61 +1076,80 @@ class _HomeTabState extends State<_HomeTab> {
             physics: const NeverScrollableScrollPhysics(),
             mainAxisSpacing: 10,
             crossAxisSpacing: 10,
-            childAspectRatio: 2.8,
+            childAspectRatio: 2.65,
             children: const [
-              _ServiceCard(icon: Icons.airplane_ticket_rounded, label: 'Air Tickets'),
+              _ServiceCard(
+                icon: Icons.airplane_ticket_rounded,
+                label: 'Air Tickets',
+              ),
               _ServiceCard(icon: Icons.hotel_rounded, label: 'Hotels'),
               _ServiceCard(icon: Icons.badge_rounded, label: 'Visas'),
-              _ServiceCard(icon: Icons.beach_access_rounded, label: 'Holidays'),
+              _ServiceCard(
+                icon: Icons.beach_access_rounded,
+                label: 'Holidays',
+              ),
             ],
           ),
         ),
 
-        const SizedBox(height: 26),
+        const SizedBox(height: 28),
+
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 18),
           child: Container(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.all(18),
             decoration: BoxDecoration(
               gradient: const LinearGradient(
-                colors: [LogoColors.dark, LogoColors.primary],
+                colors: [Color(0xff0A3D66), LogoColors.primary],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
-              borderRadius: BorderRadius.circular(24),
+              borderRadius: BorderRadius.circular(26),
               boxShadow: [
                 BoxShadow(
-                  color: LogoColors.dark.withOpacity(.25),
-                  blurRadius: 20,
-                  offset: const Offset(0, 10),
+                  color: LogoColors.dark.withOpacity(.16),
+                  blurRadius: 24,
+                  offset: const Offset(0, 12),
                 ),
               ],
             ),
-            child: Column(
+            child: const Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'Dadabhai Travel LLC',
+                Row(
+                  children: [
+                    Icon(
+                      Icons.support_agent_rounded,
+                      color: Colors.white,
+                      size: 21,
+                    ),
+                    SizedBox(width: 9),
+                    Text(
+                      'Need help planning?',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ],
+                ),
+                SizedBox(height: 6),
+                Text(
+                  'Our travel experts are ready to help you.',
                   style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
+                    color: Colors.white70,
+                    fontSize: 11.5,
                   ),
                 ),
-                const SizedBox(height: 12),
-                const _ContactRow(
-                  icon: Icons.location_on_rounded,
-                  text:
-                  'Office No: 103A1-4, A2 1st Floor, Gulf Towers, beside KM Trading, Oud Metha Road, Dubai',
-                ),
-                const SizedBox(height: 8),
-                const _ContactRow(
+                SizedBox(height: 15),
+                _ContactRow(
                   icon: Icons.phone_rounded,
                   text: '+971 4 388 5566',
                 ),
-                const SizedBox(height: 8),
-                const _ContactRow(
-                  icon: Icons.mail,
+                SizedBox(height: 8),
+                _ContactRow(
+                  icon: Icons.mail_rounded,
                   text: 'bookings@dadabhaitravel.ae',
                 ),
               ],
@@ -1429,52 +1161,6 @@ class _HomeTabState extends State<_HomeTab> {
   }
 }
 
-class _CategoryChip extends StatelessWidget {
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  const _CategoryChip({required this.label, required this.selected, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return _TapScale(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeOut,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        decoration: BoxDecoration(
-          gradient: selected
-              ? const LinearGradient(colors: [LogoColors.primary, LogoColors.light])
-              : null,
-          color: selected ? null : Colors.white,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-            color: selected ? Colors.transparent : LogoColors.dark.withOpacity(.12),
-          ),
-          boxShadow: selected
-              ? [
-            BoxShadow(
-              color: LogoColors.primary.withOpacity(.3),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
-            ),
-          ]
-              : [],
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 12.5,
-            fontWeight: FontWeight.w600,
-            color: selected ? Colors.white : LogoColors.dark.withOpacity(.65),
-          ),
-        ),
-      ),
-    );
-  }
-}
 
 /// A circular gradient-icon quick-link button used in the horizontal
 /// "InBound / Holidays / Cruises" row at the top of Home.
@@ -1483,44 +1169,51 @@ class _QuickLinkIcon extends StatelessWidget {
   final IconData icon;
   final VoidCallback onTap;
 
-  const _QuickLinkIcon({required this.label, required this.icon, required this.onTap});
+  const _QuickLinkIcon({
+    required this.label,
+    required this.icon,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
     return _TapScale(
       onTap: onTap,
-      child: SizedBox(
-        width: 68,
+      child: Container(
+        width: 104,
+        padding: const EdgeInsets.fromLTRB(12, 13, 12, 12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: LogoColors.dark.withOpacity(.06)),
+          boxShadow: [
+            BoxShadow(
+              color: LogoColors.dark.withOpacity(.06),
+              blurRadius: 18,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
         child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Container(
-              width: 56,
-              height: 56,
+              width: 44,
+              height: 44,
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [LogoColors.primary, LogoColors.light],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(
-                    color: LogoColors.primary.withOpacity(.3),
-                    blurRadius: 12,
-                    offset: const Offset(0, 6),
-                  ),
-                ],
+                color: LogoColors.primary.withOpacity(.10),
+                borderRadius: BorderRadius.circular(15),
               ),
-              child: Icon(icon, color: Colors.white, size: 24),
+              child: Icon(icon, color: LogoColors.primary, size: 22),
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 8),
             Text(
               label,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(
+              style: const TextStyle(
                 fontSize: 11.5,
-                fontWeight: FontWeight.w700,
+                fontWeight: FontWeight.w800,
                 color: LogoColors.dark,
               ),
             ),
@@ -1601,27 +1294,38 @@ class _SectionTitle extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 18),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          Text(
-            title,
-            style: TextStyle(
-              fontSize: 17,
-              fontWeight: FontWeight.w800,
-              color: LogoColors.dark,
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 19,
+                    height: 1.15,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: -.35,
+                    color: LogoColors.dark,
+                  ),
+                ),
+                if (subtitle != null) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    subtitle!,
+                    style: TextStyle(
+                      fontSize: 11.8,
+                      height: 1.35,
+                      fontWeight: FontWeight.w500,
+                      color: LogoColors.dark.withOpacity(.48),
+                    ),
+                  ),
+                ],
+              ],
             ),
           ),
-          if (subtitle != null) ...[
-            const SizedBox(height: 2),
-            Text(
-              subtitle!,
-              style: TextStyle(
-                fontSize: 12,
-                color: LogoColors.dark.withOpacity(.5),
-              ),
-            ),
-          ],
         ],
       ),
     );
@@ -1659,18 +1363,20 @@ class _ExperienceCard extends StatelessWidget {
       imageUrl: imageUrl,
       package: package,
     );
+
     return _TapScale(
       onTap: onTap,
       child: Container(
         clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: LogoColors.dark.withOpacity(.055)),
           boxShadow: [
             BoxShadow(
-              color: LogoColors.dark.withOpacity(.08),
-              blurRadius: 16,
-              offset: const Offset(0, 8),
+              color: LogoColors.dark.withOpacity(.07),
+              blurRadius: 18,
+              offset: const Offset(0, 9),
             ),
           ],
         ),
@@ -1681,37 +1387,8 @@ class _ExperienceCard extends StatelessWidget {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  imageUrl == null
-                      ? Container(
-                    decoration: const BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [LogoColors.primary, LogoColors.light],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                    ),
-                    child: const Center(
-                      child: Icon(Icons.image_rounded,
-                          color: Colors.white70, size: 28),
-                    ),
-                  )
-                      : Image.network(
-                    imageUrl!,
-                    fit: BoxFit.cover,
-                    loadingBuilder: (context, child, progress) {
-                      if (progress == null) return child;
-                      return Container(
-                        color: LogoColors.dark.withOpacity(.12),
-                        child: const Center(
-                          child: SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                        ),
-                      );
-                    },
-                    errorBuilder: (_, __, ___) => Container(
+                  if (imageUrl == null || imageUrl!.isEmpty)
+                    Container(
                       decoration: const BoxDecoration(
                         gradient: LinearGradient(
                           colors: [LogoColors.primary, LogoColors.light],
@@ -1719,74 +1396,110 @@ class _ExperienceCard extends StatelessWidget {
                           end: Alignment.bottomRight,
                         ),
                       ),
-                      child: const Center(
-                        child: Icon(Icons.image_not_supported_rounded,
-                            color: Colors.white70, size: 26),
+                      child: const Icon(
+                        Icons.landscape_rounded,
+                        color: Colors.white70,
+                        size: 34,
+                      ),
+                    )
+                  else
+                    Image.network(
+                      imageUrl!,
+                      fit: BoxFit.cover,
+                      loadingBuilder: (context, child, progress) {
+                        if (progress == null) return child;
+                        return Container(
+                          color: const Color(0xffEDF3F8),
+                          child: const Center(
+                            child: SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          ),
+                        );
+                      },
+                      errorBuilder: (_, __, ___) => Container(
+                        decoration: const BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [LogoColors.primary, LogoColors.light],
+                          ),
+                        ),
+                        child: const Icon(
+                          Icons.image_not_supported_rounded,
+                          color: Colors.white70,
+                        ),
                       ),
                     ),
-                  ),
                   Positioned(
-                    top: 8,
-                    right: 8,
+                    top: 9,
+                    right: 9,
                     child: _MiniFavorite(item: wishlistItem),
                   ),
-                  if (showRating)
-                    Positioned(
-                      left: 8,
-                      bottom: 8,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(.92),
-                          borderRadius: BorderRadius.circular(10),
+                  Positioned(
+                    left: 9,
+                    bottom: 9,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 5,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(.48),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        subtitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 9.8,
+                          fontWeight: FontWeight.w700,
                         ),
-                        child: const _RatingBadge(),
                       ),
                     ),
+                  ),
                 ],
               ),
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(11, 9, 11, 11),
+              padding: const EdgeInsets.fromLTRB(12, 11, 12, 12),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
                     title,
-                    maxLines: 1,
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 12.8,
+                    style: const TextStyle(
                       color: LogoColors.dark,
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    subtitle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 10.8,
-                      color: LogoColors.dark.withOpacity(.5),
+                      fontSize: 12.7,
+                      height: 1.25,
+                      fontWeight: FontWeight.w800,
                     ),
                   ),
                   if (priceText != null) ...[
-                    const SizedBox(height: 5),
+                    const SizedBox(height: 7),
                     Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
-                        Text("From", style: TextStyle(color: Colors.grey, fontSize: 11.5),),
-                        SizedBox(
-                          width: 5,
+                        Text(
+                          'From ',
+                          style: TextStyle(
+                            color: LogoColors.dark.withOpacity(.42),
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
                         Text(
-                          priceText!,
+                          'AED $priceText',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
-                            fontSize: 11.5,
-                            fontWeight: FontWeight.w800,
                             color: LogoColors.primary,
+                            fontSize: 12.8,
+                            fontWeight: FontWeight.w900,
                           ),
                         ),
                       ],
@@ -1867,40 +1580,41 @@ class _DestinationChipCard extends StatelessWidget {
       imageUrl: imageUrl,
       package: package,
     );
+
     return _TapScale(
       onTap: onTap,
       child: Container(
-        width: 140,
-        height: 168,
-        margin: const EdgeInsets.only(right: 12),
+        width: 164,
+        height: 184,
         clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(20),
-          color: LogoColors.dark,
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: LogoColors.dark.withOpacity(.05)),
+          boxShadow: [
+            BoxShadow(
+              color: LogoColors.dark.withOpacity(.07),
+              blurRadius: 18,
+              offset: const Offset(0, 9),
+            ),
+          ],
         ),
         child: Stack(
           fit: StackFit.expand,
           children: [
-            Image.network(
+            imageUrl.isEmpty
+                ? Container(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [LogoColors.primary, LogoColors.dark],
+                ),
+              ),
+            )
+                : Image.network(
               imageUrl,
               fit: BoxFit.cover,
-              loadingBuilder: (context, child, progress) {
-                if (progress == null) return child;
-                return const Center(
-                  child: SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                    ),
-                  ),
-                );
-              },
               errorBuilder: (_, __, ___) => Container(
                 color: LogoColors.primary,
-                child: const Icon(Icons.image_not_supported_rounded,
-                    color: Colors.white70, size: 22),
               ),
             ),
             Container(
@@ -1910,41 +1624,46 @@ class _DestinationChipCard extends StatelessWidget {
                   end: Alignment.bottomCenter,
                   colors: [
                     Colors.transparent,
-                    Colors.transparent,
-                    LogoColors.dark.withOpacity(.9),
+                    Colors.black.withOpacity(.08),
+                    Colors.black.withOpacity(.78),
                   ],
-                  stops: const [0, .45, 1],
+                  stops: const [0, .48, 1],
                 ),
               ),
             ),
-            Positioned(top: 8, right: 8, child: _MiniFavorite(item: wishlistItem)),
             Positioned(
-              left: 12,
-              right: 12,
-              bottom: 12,
+              top: 9,
+              right: 9,
+              child: _MiniFavorite(item: wishlistItem),
+            ),
+            Positioned(
+              left: 13,
+              right: 13,
+              bottom: 13,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
                     label,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       color: Colors.white,
-                      fontWeight: FontWeight.w800,
-                      fontSize: 14,
+                      fontSize: 13.2,
+                      height: 1.18,
+                      fontWeight: FontWeight.w900,
                     ),
                   ),
-                  const SizedBox(height: 3),
-                  const _RatingBadge(light: true),
                   if (priceText != null) ...[
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 5),
                     Text(
-                      priceText!,
+                      'From AED $priceText',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        color: Colors.white.withOpacity(.9),
+                        color: Colors.white.withOpacity(.88),
                         fontSize: 10.5,
-                        fontWeight: FontWeight.w600,
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
                   ],
@@ -1969,43 +1688,47 @@ class _ServiceCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: LogoColors.dark.withOpacity(.055)),
         boxShadow: [
           BoxShadow(
-            color: LogoColors.dark.withOpacity(.06),
-            blurRadius: 12,
-            offset: const Offset(0, 5),
+            color: LogoColors.dark.withOpacity(.045),
+            blurRadius: 14,
+            offset: const Offset(0, 7),
           ),
         ],
       ),
       child: Row(
         children: [
           Container(
-            width: 40,
-            height: 40,
+            width: 38,
+            height: 38,
             decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [LogoColors.primary, LogoColors.light],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              borderRadius: BorderRadius.circular(12),
+              color: LogoColors.primary.withOpacity(.10),
+              borderRadius: BorderRadius.circular(13),
             ),
-            child: Icon(icon, color: Colors.white, size: 19),
+            child: Icon(icon, size: 20, color: LogoColors.primary),
           ),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
               label,
-              style: TextStyle(
-                fontWeight: FontWeight.w600,
-                fontSize: 12.5,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
                 color: LogoColors.dark,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
               ),
             ),
+          ),
+          Icon(
+            Icons.arrow_forward_ios_rounded,
+            size: 11,
+            color: LogoColors.dark.withOpacity(.24),
           ),
         ],
       ),
@@ -2729,6 +2452,7 @@ class _TravelPackage {
   final String? priceText;
   final String? adultPriceText;
   final String? childPriceText;
+  final String? infantPriceText;
   final String? durationText;
   final String country;
   final String about;
@@ -2745,6 +2469,7 @@ class _TravelPackage {
     this.priceText,
     this.adultPriceText,
     this.childPriceText,
+    this.infantPriceText,
     this.durationText,
     required this.country,
     required this.about,
@@ -2762,6 +2487,7 @@ class _TravelPackage {
     'priceText': priceText,
     'adultPriceText': adultPriceText,
     'childPriceText': childPriceText,
+    'infantPriceText': infantPriceText,
     'durationText': durationText,
     'country': country,
     'about': about,
@@ -2786,6 +2512,7 @@ class _TravelPackage {
       priceText: map['priceText'],
       adultPriceText: map['adultPriceText'] ?? map['priceText'],
       childPriceText: map['childPriceText'],
+      infantPriceText: map['infantPriceText'],
       durationText: map['durationText'],
       country: map['country'] ?? 'United Arab Emirates',
       about: map['about'] ?? '',
@@ -3132,6 +2859,7 @@ _TravelPackage _travelPackageFromAdmin(AdminPackage p) {
     priceText: p.displayPriceText,
     adultPriceText: p.adultPriceText ?? p.priceText,
     childPriceText: p.childPriceText,
+    infantPriceText: p.infantPriceText,
     durationText: p.durationText,
     country: p.country,
     about: p.content,
@@ -4377,7 +4105,7 @@ final List<_SearchEntry> _searchIndex = _buildSearchIndex();
 /// GetYourGuide-style flow already used for the Home tab.
 class _SearchBar extends StatelessWidget {
   final String hint;
-  const _SearchBar({this.hint = 'Search things to do, tours & tickets'});
+  const _SearchBar({this.hint = 'Search tours, activities & holidays'});
 
   @override
   Widget build(BuildContext context) {
@@ -4389,36 +4117,62 @@ class _SearchBar extends StatelessWidget {
           MaterialPageRoute(builder: (context) => const _SearchPage()),
         ),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+          height: 56,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
           decoration: BoxDecoration(
             color: Colors.white,
-            borderRadius: BorderRadius.circular(18),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: LogoColors.dark.withOpacity(.07)),
             boxShadow: [
               BoxShadow(
-                color: LogoColors.dark.withOpacity(.08),
-                blurRadius: 16,
-                offset: const Offset(0, 6),
+                color: LogoColors.dark.withOpacity(.07),
+                blurRadius: 22,
+                offset: const Offset(0, 10),
               ),
             ],
           ),
           child: Row(
             children: [
-              Icon(Icons.search_rounded, color: LogoColors.primary, size: 20),
-              const SizedBox(width: 10),
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: LogoColors.primary.withOpacity(.10),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Icon(
+                  Icons.search_rounded,
+                  color: LogoColors.primary,
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 12),
               Expanded(
                 child: Text(
                   hint,
-                  style: TextStyle(fontSize: 13, color: LogoColors.dark.withOpacity(.45)),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: LogoColors.dark.withOpacity(.46),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
               Container(
-                padding: const EdgeInsets.all(7),
+                width: 36,
+                height: 36,
                 decoration: BoxDecoration(
-                  color: LogoColors.light.withOpacity(.15),
+                  color: LogoColors.bg,
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: Icon(Icons.tune_rounded, size: 16, color: LogoColors.primary),
+                child: Icon(
+                  Icons.tune_rounded,
+                  color: LogoColors.dark.withOpacity(.55),
+                  size: 18,
+                ),
               ),
+              const SizedBox(width: 2),
             ],
           ),
         ),
@@ -4679,72 +4433,6 @@ class _HolidaysTab extends StatelessWidget {
 /// ---------------------------------------------------------------------
 /// WISHLIST TAB
 /// ---------------------------------------------------------------------
-class _WishlistTab extends StatelessWidget {
-  const _WishlistTab();
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: WishlistController.instance,
-      builder: (context, _) {
-        final items = WishlistController.instance.items;
-        return ListView(
-          padding: const EdgeInsets.fromLTRB(18, 18, 18, 100),
-          children: [
-            const _SectionTitle('My Wishlist', subtitle: 'Saved tours, holidays & cruises'),
-            const SizedBox(height: 16),
-            if (items.isEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 60),
-                child: Column(
-                  children: [
-                    Icon(Icons.favorite_border_rounded, size: 46, color: LogoColors.dark.withOpacity(.2)),
-                    const SizedBox(height: 12),
-                    Text('Nothing saved yet',
-                        style: TextStyle(fontWeight: FontWeight.w700, color: LogoColors.dark.withOpacity(.5))),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Tap the heart on any experience to save it here',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 12, color: LogoColors.dark.withOpacity(.4)),
-                    ),
-                  ],
-                ),
-              )
-            else
-              GridView.builder(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                itemCount: items.length,
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 2,
-                  mainAxisSpacing: 14,
-                  crossAxisSpacing: 14,
-                  childAspectRatio: .8,
-                ),
-                itemBuilder: (context, index) {
-                  final item = items[index];
-                  return _AnimatedEntrance(
-                    index: index,
-                    child: _ExperienceCard(
-                      imageUrl: item.imageUrl,
-                      title: item.title,
-                      subtitle: item.subtitle,
-                      package: item.package,
-                      onTap: () => Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (context) => _PackageDetailPage(package: item.package)),
-                      ),
-                    ),
-                  );
-                },
-              ),
-          ],
-        );
-      },
-    );
-  }
-}
 
 /// ---------------------------------------------------------------------
 /// BOOKINGS TAB — every successful "Check availability" enquiry lands
@@ -4753,185 +4441,7 @@ class _WishlistTab extends StatelessWidget {
 /// booking's current status.
 /// ---------------------------------------------------------------------
 ///
-class _BookingsTab extends StatelessWidget {
-  const _BookingsTab();
 
-  String _fmt(DateTime d) => '${d.day.toString().padLeft(2, '0')}/'
-      '${d.month.toString().padLeft(2, '0')}/${d.year}';
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: BookingsController.instance,
-      builder: (context, _) {
-        final bookings = BookingsController.instance.bookings;
-        return ListView(
-          padding: const EdgeInsets.fromLTRB(18, 18, 18, 100),
-          children: [
-            const _SectionTitle('My Bookings', subtitle: 'Track the status of your enquiries'),
-            const SizedBox(height: 16),
-            if (bookings.isEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 60),
-                child: Column(
-                  children: [
-                    Icon(Icons.confirmation_num_outlined,
-                        size: 46, color: LogoColors.dark.withOpacity(.2)),
-                    const SizedBox(height: 12),
-                    Text('No bookings yet',
-                        style: TextStyle(
-                            fontWeight: FontWeight.w700, color: LogoColors.dark.withOpacity(.5))),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Submit "Check availability" on any package to see it here',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 12, color: LogoColors.dark.withOpacity(.4)),
-                    ),
-                  ],
-                ),
-              )
-            else
-              for (int i = 0; i < bookings.length; i++)
-                _AnimatedEntrance(
-                  index: i,
-                  child: Padding(
-                    padding: const EdgeInsets.only(bottom: 14),
-                    child: _BookingCard(
-                      booking: bookings[i],
-                      dateLabel:
-                      '${_fmt(bookings[i].checkIn)}',
-                      onTap: () => Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => _PackageDetailPage(
-                            package: bookings[i].package,
-                            booking: bookings[i],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-          ],
-        );
-      },
-    );
-  }
-}
-
-class _BookingCard extends StatelessWidget {
-  final BookingItem booking;
-  final String dateLabel;
-  final VoidCallback onTap;
-
-  const _BookingCard({required this.booking, required this.dateLabel, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final pkg = booking.package;
-    final imageUrl = pkg.images.isNotEmpty ? pkg.images.first : null;
-    return _TapScale(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(18),
-          boxShadow: [
-            BoxShadow(
-              color: LogoColors.dark.withOpacity(.06),
-              blurRadius: 14,
-              offset: const Offset(0, 6),
-            ),
-          ],
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(14),
-              child: imageUrl == null
-                  ? Container(
-                width: 64,
-                height: 64,
-                color: LogoColors.light.withOpacity(.15),
-                child: Icon(Icons.card_travel_rounded, color: LogoColors.primary, size: 22),
-              )
-                  : Image.network(
-                imageUrl,
-                width: 64,
-                height: 64,
-                fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => Container(
-                  width: 64,
-                  height: 64,
-                  color: LogoColors.light.withOpacity(.15),
-                  child: Icon(Icons.image_not_supported_rounded,
-                      color: LogoColors.primary, size: 18),
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    pkg.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                        fontWeight: FontWeight.w700, fontSize: 13.5, color: LogoColors.dark),
-                  ),
-                  const SizedBox(height: 3),
-                  Row(
-                    children: [
-                      Icon(Icons.calendar_today_rounded,
-                          size: 11, color: LogoColors.dark.withOpacity(.4)),
-                      const SizedBox(width: 4),
-                      Expanded(
-                        child: Text(
-                          dateLabel,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(fontSize: 11, color: LogoColors.dark.withOpacity(.5)),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: booking.status.color.withOpacity(.12),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(booking.status.icon, size: 12, color: booking.status.color),
-                        const SizedBox(width: 5),
-                        Text(
-                          booking.status.label,
-                          style: TextStyle(
-                            fontSize: 10.5,
-                            fontWeight: FontWeight.w700,
-                            color: booking.status.color,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Icon(Icons.chevron_right_rounded, color: LogoColors.dark.withOpacity(.3)),
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 /// ---------------------------------------------------------------------
 /// CRUISES TAB
@@ -5268,10 +4778,12 @@ class _PackageDetailPageState extends State<_PackageDetailPage> {
                           const SizedBox(height:20),
 
                           if ((pkg.adultPriceText != null && pkg.adultPriceText!.isNotEmpty) ||
-                              (pkg.childPriceText != null && pkg.childPriceText!.isNotEmpty)) ...[
+                              (pkg.childPriceText != null && pkg.childPriceText!.isNotEmpty) ||
+                              (pkg.infantPriceText != null && pkg.infantPriceText!.isNotEmpty)                                                            ) ...[
                             _PriceTypeSelector(
                               adultPrice: pkg.adultPriceText ?? pkg.priceText,
                               childPrice: pkg.childPriceText,
+                              infantPrice: pkg.infantPriceText,
                             ),
                             const SizedBox(height: 16),
                           ],
@@ -5329,7 +4841,6 @@ class _PackageDetailPageState extends State<_PackageDetailPage> {
             ),
 
 
-
             /// TOP BUTTONS
             Positioned(
               top:40,
@@ -5381,8 +4892,6 @@ class _PackageDetailPageState extends State<_PackageDetailPage> {
             ),
 
 
-
-            /// BOTTOM BAR
             Positioned(
               left: 0,
               right: 0,
@@ -5482,26 +4991,61 @@ class _PackageDetailPageState extends State<_PackageDetailPage> {
 class _PriceTypeSelector extends StatefulWidget {
   final String? adultPrice;
   final String? childPrice;
+  final String? infantPrice;
 
-  const _PriceTypeSelector({this.adultPrice, this.childPrice});
+  const _PriceTypeSelector({
+    this.adultPrice,
+    this.childPrice,
+    this.infantPrice,
+  });
 
   @override
   State<_PriceTypeSelector> createState() => _PriceTypeSelectorState();
 }
 
 class _PriceTypeSelectorState extends State<_PriceTypeSelector> {
-  late String _selected =
-  (widget.adultPrice != null && widget.adultPrice!.isNotEmpty) ? 'Adult' : 'Child';
+  String? _selected;
+
+  bool _has(String? v) => v != null && v.trim().isNotEmpty;
+
+  String? _priceFor(String type) {
+    switch (type) {
+      case 'Adult':
+        return widget.adultPrice;
+      case 'Child':
+        return widget.childPrice;
+      case 'Infant':
+        return widget.infantPrice;
+    }
+    return null;
+  }
+
+  IconData _iconFor(String type) {
+    switch (type) {
+      case 'Adult':
+        return Icons.person_rounded;
+      case 'Child':
+        return Icons.child_care_rounded;
+      case 'Infant':
+        return Icons.baby_changing_station_rounded;
+    }
+    return Icons.person_rounded;
+  }
 
   @override
   Widget build(BuildContext context) {
     final options = <String>[
-      if (widget.adultPrice != null && widget.adultPrice!.isNotEmpty) 'Adult',
-      if (widget.childPrice != null && widget.childPrice!.isNotEmpty) 'Child',
+      if (_has(widget.adultPrice)) 'Adult',
+      if (_has(widget.childPrice)) 'Child',
+      if (_has(widget.infantPrice)) 'Infant',
     ];
     if (options.isEmpty) return const SizedBox.shrink();
-    if (!options.contains(_selected)) _selected = options.first;
-    final value = _selected == 'Adult' ? widget.adultPrice : widget.childPrice;
+
+    if (_selected == null || !options.contains(_selected)) {
+      _selected = options.first;
+    }
+    final selected = _selected!;
+    final value = _priceFor(selected);
 
     return Container(
       padding: const EdgeInsets.all(14),
@@ -5520,7 +5064,7 @@ class _PriceTypeSelectorState extends State<_PriceTypeSelector> {
         children: [
           Expanded(
             child: _PrettyDropdown<String>(
-              value: _selected,
+              value: selected,
               label: 'Price for',
               prefixIcon: const Icon(
                 Icons.payments_rounded,
@@ -5534,9 +5078,7 @@ class _PriceTypeSelectorState extends State<_PriceTypeSelector> {
                   child: Row(
                     children: [
                       Icon(
-                        type == 'Adult'
-                            ? Icons.person_rounded
-                            : Icons.child_care_rounded,
+                        _iconFor(type),
                         color: LogoColors.primary,
                         size: 18,
                       ),
@@ -5562,12 +5104,22 @@ class _PriceTypeSelectorState extends State<_PriceTypeSelector> {
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Text('$_selected price',
-                  style: TextStyle(fontSize: 10.5, color: LogoColors.dark.withOpacity(.5))),
+              Text(
+                '$selected price',
+                style: TextStyle(
+                  fontSize: 10.5,
+                  color: LogoColors.dark.withOpacity(.5),
+                ),
+              ),
               const SizedBox(height: 3),
-              Text(value ?? '',
-                  style: const TextStyle(
-                      fontSize: 16, fontWeight: FontWeight.w800, color: LogoColors.primary)),
+              Text(
+                'AED $value',
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                  color: LogoColors.primary,
+                ),
+              ),
             ],
           ),
         ],
@@ -5760,6 +5312,7 @@ class _BookingFormPageState extends State<_BookingFormPage> {
   DateTime? _checkOut;
   int _adults = 1;
   int _children = 0;
+  int _infant = 0;
   String? _selectedPackage;
   String? _selectedCountry;
 
@@ -6016,6 +5569,7 @@ class _BookingFormPageState extends State<_BookingFormPage> {
       checkIn: _checkIn!,
       adults: _adults,
       children: _children,
+      infant: _infant,
       selectedPackageOption: _selectedPackage,
       status: BookingStatus.pending,
     );
@@ -6281,6 +5835,17 @@ class _BookingFormPageState extends State<_BookingFormPage> {
                 min: 0,
                 max: 10,
                 onChanged: (v) => setState(() => _children = v),
+              ),
+            ),
+            const SizedBox(height: 8),
+            _AnimatedEntrance(
+              index: 7,
+              child: _CounterField(
+                label: 'Infant',
+                value: _infant,
+                min: 0,
+                max: 10,
+                onChanged: (v) => setState(() => _infant = v),
               ),
             ),
 
